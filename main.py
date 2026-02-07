@@ -5,29 +5,32 @@ from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import Command
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
-import fitz  # PyMuPDF for PDF
-import docx  # python-docx for Word
+from aiohttp import web  # Render को खुश रखने के लिए
 
 # Logging
 logging.basicConfig(level=logging.INFO)
 
-# Token from Environment Variable
+# Token
 API_TOKEN = os.getenv('BOT_TOKEN')
 bot = Bot(token=API_TOKEN)
 dp = Dispatcher()
 
-# --- फाइल पढ़ने के फंक्शन्स ---
-def read_pdf(file_path):
-    text = ""
-    with fitz.open(file_path) as doc:
-        for page in doc:
-            text += page.get_text()
-    return text
+# --- 1. Fake Web Server (Render के लिए जुगाड़) ---
+async def health_check(request):
+    return web.Response(text="Bot is Alive and Running!")
 
-def read_docx(file_path):
-    doc = docx.Document(file_path)
-    return "\n".join([para.text for para in doc.paragraphs])
+async def start_web_server():
+    app = web.Application()
+    app.router.add_get('/', health_check)
+    runner = web.AppRunner(app)
+    await runner.setup()
+    # Render जो पोर्ट देगा उसे यूज़ करेंगे, नहीं तो 8080
+    port = int(os.environ.get("PORT", 8080))
+    site = web.TCPSite(runner, '0.0.0.0', port)
+    await site.start()
+    logging.info(f"Fake site started on port {port}")
 
+# --- 2. Plagiarism Logic ---
 def calculate_similarity(text1, text2):
     try:
         vectorizer = TfidfVectorizer()
@@ -36,64 +39,25 @@ def calculate_similarity(text1, text2):
     except:
         return 0
 
-# --- बॉट कमांड्स ---
-# ग्लोबल वेरिएबल (जुगाड़: अभी के लिए यूजर का पहला टेक्स्ट यहाँ सेव होगा)
-user_data = {}
-
 @dp.message(Command("start"))
 async def start_cmd(message: types.Message):
-    await message.answer(
-        "📂 **Expert Document Checker**\n\n"
-        "मैं PDF और Word फाइल चेक कर सकता हूँ!\n"
-        "स्टेप 1: अपनी **पहली फाइल** (Original) भेजें।\n"
-        "स्टेप 2: फिर **दूसरी फाइल** (To Check) भेजें।"
-    )
+    await message.answer("✅ मैं ऑनलाइन हूँ! टेक्स्ट भेजें: 'Text1' VS 'Text2'")
 
-@dp.message(F.document)
-async def handle_document(message: types.Message):
-    user_id = message.from_user.id
-    file_id = message.document.file_id
-    file_name = message.document.file_name
-
-    # फाइल डाउनलोड करना
-    file = await bot.get_file(file_id)
-    file_path = f"{user_id}_{file_name}"
-    await bot.download_file(file.file_path, file_path)
-
-    # टेक्स्ट निकालना
-    text = ""
-    if file_name.endswith('.pdf'):
-        text = read_pdf(file_path)
-    elif file_name.endswith('.docx'):
-        text = read_docx(file_path)
-    else:
-        await message.answer("❌ सिर्फ PDF या DOCX फाइल भेजें।")
-        os.remove(file_path)
-        return
-
-    # फाइल डिलीट कर दें (सर्वर साफ़ रखने के लिए)
-    os.remove(file_path)
-
-    # लॉजिक: क्या यह पहली फाइल है या दूसरी?
-    if user_id not in user_data:
-        user_data[user_id] = text
-        await message.answer("✅ **पहली फाइल सेव हो गई!**\nअब दूसरी फाइल भेजें जिससे तुलना करनी है।")
-    else:
-        text1 = user_data[user_id]
-        text2 = text
-        
-        # रिजल्ट
-        score = calculate_similarity(text1, text2)
-        del user_data[user_id]  # डेटा साफ़ करें
-
-        result = (
-            f"🔍 **Comparison Result:**\n"
-            f"📊 Similarity: `{score:.2f}%`\n"
-            f"📝 Status: {'Copied 🚨' if score > 20 else 'Unique ✅'}"
-        )
+@dp.message(F.text.contains("VS"))
+async def check_text(message: types.Message):
+    try:
+        parts = message.text.split("VS")
+        score = calculate_similarity(parts[0], parts[1])
+        result = f"Similarity: {score:.2f}%"
         await message.answer(result)
+    except:
+        await message.answer("Error!")
 
+# --- 3. Main System ---
 async def main():
+    # पहले वेब सर्वर स्टार्ट करें
+    await start_web_server()
+    # फिर बॉट स्टार्ट करें
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
