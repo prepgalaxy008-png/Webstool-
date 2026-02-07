@@ -4,5 +4,5 @@ numpy
 aiohttp
 pymupdf
 python-docx
-beautifulsoup4
 googlesearch-python
+beautifulsoup4
