@@ -1,1 +1,3 @@
-'aiogram, scikit-learn, numpy':
+aiogram
+scikit-learn
+numpy
