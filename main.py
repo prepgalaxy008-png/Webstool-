@@ -8,97 +8,78 @@ from googlesearch import search
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
 from aiohttp import web
-import fitz
-import docx
 
-# 1. Configuration
+# 1. Setup
 logging.basicConfig(level=logging.INFO)
 API_TOKEN = os.getenv('BOT_TOKEN')
-ADMIN_ID = 7020885934  # आपकी ID सेट है
+ADMIN_ID = 7020885934 # आपकी ID सेट है
 
 bot = Bot(token=API_TOKEN)
 dp = Dispatcher()
-
 stats = {"total_users": set(), "checks_done": 0}
-user_memory = {}
 
-# --- 2. Render Health Server ---
-async def health_check(request):
-    return web.Response(text="Plagiarism Bot is Live & Accurate!")
+# --- 2. Advanced Cleaner (Wikipedia Fix) ---
+def ultra_clean(text):
+    # 1. Wikipedia के [1], [26][27] जैसे नंबर्स को हटाता है
+    text = re.sub(r'\[\d+\]', '', text)
+    # 2. स्पेशल कैरेक्टर्स और एक्स्ट्रा स्पेस हटाता है
+    text = re.sub(r'\s+', ' ', text)
+    return text.strip()
 
+# --- 3. Render Server ---
 async def start_web_server():
     app = web.Application()
-    app.router.add_get('/', health_check)
+    app.router.add_get('/', lambda r: web.Response(text="Bot is Live!"))
     runner = web.AppRunner(app)
     await runner.setup()
-    port = int(os.environ.get("PORT", 8080))
-    site = web.TCPSite(runner, '0.0.0.0', port)
+    site = web.TCPSite(runner, '0.0.0.0', int(os.environ.get("PORT", 8080)))
     await site.start()
 
-# --- 3. Expert Functions (Cleaning & Searching) ---
-def clean_text(text):
-    # Wikipedia के [1], [22] जैसे नंबर्स हटाता है ताकि सर्च सटीक हो
-    return re.sub(r'\[\d+\]', '', text).strip()
-
-def calc_sim(t1, t2):
-    try:
-        v = TfidfVectorizer()
-        return cosine_similarity(v.fit_transform([t1, t2]))[0][1] * 100
-    except: return 0
-
-# --- 4. Bot Handlers ---
-
+# --- 4. Logic & Handlers ---
 @dp.message(Command("start"))
 async def cmd_start(message: types.Message):
     stats["total_users"].add(message.from_user.id)
-    await message.answer("🚀 **Expert Bot Active!**\n\nटेक्स्ट भेजें (Wikipedia से भी) या फाइलें।")
-
-@dp.message(Command("admin"))
-async def admin_panel(message: types.Message):
-    if message.from_user.id == ADMIN_ID:
-        report = (
-            "📊 **Admin Dashboard**\n\n"
-            f"👤 Users: `{len(stats['total_users'])}` \n"
-            f"🔍 Checks: `{stats['checks_done']}`"
-        )
-        await message.answer(report)
-    else:
-        await message.answer(f"❌ आप एडमिन नहीं हैं। ID: `{message.from_user.id}`")
+    await message.answer("✅ **Advanced Bot Active!**\nWikipedia टेक्स्ट भेजकर टेस्ट करें।")
 
 @dp.message(F.text)
 async def handle_text(msg: types.Message):
+    if msg.text.startswith('/'): return
+    
     stats["checks_done"] += 1
     stats["total_users"].add(msg.from_user.id)
     
-    text = clean_text(msg.text) # क्लीनिंग चालू
-
-    if "vs" in text.lower():
-        parts = text.lower().split("vs")
-        if len(parts) == 2:
-            score = calc_sim(parts[0], parts[1])
-            await msg.reply(f"📊 Similarity: `{score:.2f}%`")
-        return
-
-    m = await msg.answer("🌐 इंटरनेट पर गहराई से खोजा जा रहा है...")
+    # टेक्स्ट को पूरी तरह साफ़ करना
+    cleaned_text = ultra_clean(msg.text)
     
-    # सबसे सटीक लाइन ढूँढना सर्च के लिए
-    lines = [l for l in text.split('.') if len(l) > 20]
-    search_query = max(lines, key=len).strip() if lines else text[:80]
+    m = await msg.answer("🌐 इंटरनेट पर सटीक खोज जारी है...")
+    
+    # सबसे महत्वपूर्ण वाक्य (Sentence) चुनना
+    sentences = [s for s in cleaned_text.split('.') if len(s) > 30]
+    query = sentences[0] if sentences else cleaned_text[:80]
 
     links = []
     try:
-        # Exact Match के लिए कोट्स का इस्तेमाल
-        for url in search(f'"{search_query[:80]}"', num_results=3):
+        # Exact Match के लिए डबल कोट्स का उपयोग
+        for url in search(f'"{query[:100]}"', num_results=3):
             links.append(url)
-    except: pass
+    except Exception as e:
+        logging.error(f"Search Error: {e}")
 
     if links:
-        report = "🚨 **Plagiarism Detected!**\n\nयहाँ मैच मिला है:\n" + "\n".join(links)
+        report = "🚨 **Plagiarism Detected!**\n\nयहाँ मैच मिला है:\n" + "\n".join([f"🔗 {l}" for l in links])
         await m.edit_text(report, disable_web_page_preview=True)
     else:
-        await m.edit_text("✅ यह कंटेंट इंटरनेट पर ओरिजिनल लग रहा है!")
+        # अगर कोट्स के साथ मैच न मिले तो सामान्य सर्च
+        try:
+            for url in search(query[:100], num_results=2):
+                links.append(url)
+        except: pass
+        
+        if links:
+            await m.edit_text("🚨 **Potential Match Found:**\n" + "\n".join(links), disable_web_page_preview=True)
+        else:
+            await m.edit_text("✅ यह कंटेंट इंटरनेट पर ओरिजिनल लग रहा है!")
 
-# --- 5. Main ---
 async def main():
     await start_web_server()
     await dp.start_polling(bot)
