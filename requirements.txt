@@ -1,3 +1,5 @@
 aiogram
 scikit-learn
 numpy
+pymupdf
+python-docx
