@@ -1,66 +1,99 @@
+import os
 import asyncio
 import logging
-import os
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import Command
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
+import fitz  # PyMuPDF for PDF
+import docx  # python-docx for Word
 
-# 1. Logging setup
+# Logging
 logging.basicConfig(level=logging.INFO)
 
-# 2. Token environment variable से लेना
-API_TOKEN = os.getenv("BOT_TOKEN")
-
+# Token from Environment Variable
+API_TOKEN = os.getenv('BOT_TOKEN')
 bot = Bot(token=API_TOKEN)
 dp = Dispatcher()
 
-# 3. Plagiarism Checking Logic
-def get_similarity_report(text1, text2):
-    try:
-        documents = [text1, text2]
-        vectorizer = TfidfVectorizer()
-        tfidf_matrix = vectorizer.fit_transform(documents)
+# --- फाइल पढ़ने के फंक्शन्स ---
+def read_pdf(file_path):
+    text = ""
+    with fitz.open(file_path) as doc:
+        for page in doc:
+            text += page.get_text()
+    return text
 
-        similarity = cosine_similarity(tfidf_matrix[0:1], tfidf_matrix[1:2])
-        score = similarity[0][0] * 100
-        return score
-    except Exception:
+def read_docx(file_path):
+    doc = docx.Document(file_path)
+    return "\n".join([para.text for para in doc.paragraphs])
+
+def calculate_similarity(text1, text2):
+    try:
+        vectorizer = TfidfVectorizer()
+        tfidf = vectorizer.fit_transform([text1, text2])
+        return cosine_similarity(tfidf[0:1], tfidf[1:2])[0][0] * 100
+    except:
         return 0
 
-# 4. Bot Commands
+# --- बॉट कमांड्स ---
+# ग्लोबल वेरिएबल (जुगाड़: अभी के लिए यूजर का पहला टेक्स्ट यहाँ सेव होगा)
+user_data = {}
+
 @dp.message(Command("start"))
-async def send_welcome(message: types.Message):
+async def start_cmd(message: types.Message):
     await message.answer(
-        "🔥 **Expert Plagiarism Checker Bot** 🔥\n\n"
-        "दो टेक्स्ट के बीच समानता चेक करने के लिए उन्हें इस तरह भेजें:\n"
-        "`Text A` VS `Text B`\n\n"
-        "नोट: दोनों के बीच 'VS' लिखना ज़रूरी है।"
+        "📂 **Expert Document Checker**\n\n"
+        "मैं PDF और Word फाइल चेक कर सकता हूँ!\n"
+        "स्टेप 1: अपनी **पहली फाइल** (Original) भेजें।\n"
+        "स्टेप 2: फिर **दूसरी फाइल** (To Check) भेजें।"
     )
 
-@dp.message(F.text.contains("VS"))
-async def process_check(message: types.Message):
-    texts = message.text.split("VS")
-    if len(texts) < 2:
-        await message.reply("कृपया सही फॉर्मेट का उपयोग करें: Text1 VS Text2")
+@dp.message(F.document)
+async def handle_document(message: types.Message):
+    user_id = message.from_user.id
+    file_id = message.document.file_id
+    file_name = message.document.file_name
+
+    # फाइल डाउनलोड करना
+    file = await bot.get_file(file_id)
+    file_path = f"{user_id}_{file_name}"
+    await bot.download_file(file.file_path, file_path)
+
+    # टेक्स्ट निकालना
+    text = ""
+    if file_name.endswith('.pdf'):
+        text = read_pdf(file_path)
+    elif file_name.endswith('.docx'):
+        text = read_docx(file_path)
+    else:
+        await message.answer("❌ सिर्फ PDF या DOCX फाइल भेजें।")
+        os.remove(file_path)
         return
 
-    wait_msg = await message.answer("🔍 एनेलाइजिंग... कृपया प्रतीक्षा करें।")
+    # फाइल डिलीट कर दें (सर्वर साफ़ रखने के लिए)
+    os.remove(file_path)
 
-    score = get_similarity_report(texts[0].strip(), texts[1].strip())
+    # लॉजिक: क्या यह पहली फाइल है या दूसरी?
+    if user_id not in user_data:
+        user_data[user_id] = text
+        await message.answer("✅ **पहली फाइल सेव हो गई!**\nअब दूसरी फाइल भेजें जिससे तुलना करनी है।")
+    else:
+        text1 = user_data[user_id]
+        text2 = text
+        
+        # रिजल्ट
+        score = calculate_similarity(text1, text2)
+        del user_data[user_id]  # डेटा साफ़ करें
 
-    status = "🚨 **Plagiarism Detected!**" if score > 25 else "✅ **Content is Unique!**"
-    response = (
-        f"{status}\n\n"
-        f"📊 **Similarity Score:** `{score:.2f}%`\n"
-        f"✍️ **Verdict:** " + ("कॉपी किया गया है।" if score > 25 else "ओरिजिनल कंटेंट है।")
-    )
+        result = (
+            f"🔍 **Comparison Result:**\n"
+            f"📊 Similarity: `{score:.2f}%`\n"
+            f"📝 Status: {'Copied 🚨' if score > 20 else 'Unique ✅'}"
+        )
+        await message.answer(result)
 
-    await wait_msg.edit_text(response, parse_mode="Markdown")
-
-# 5. Start Bot
 async def main():
-    print("Bot is Running...")
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
