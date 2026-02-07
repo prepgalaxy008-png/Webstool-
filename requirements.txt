@@ -1,5 +1,6 @@
 aiogram
 scikit-learn
 numpy
+aiohttp
 pymupdf
 python-docx
